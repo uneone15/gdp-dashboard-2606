@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import math
 from pathlib import Path
+import plotly.express as px
 
 st.set_page_config(
     page_title='GDP dashboard',
@@ -201,12 +202,24 @@ if not selected_countries:
     st.stop()
 
 # 3. GDP 단위 선택
-unit = st.radio(
-    'GDP unit',
-    ['Trillion (T)', 'Billion (B)', 'Million (M)'],
-    index=1,
-    horizontal=True,
-)
+col_unit, col_chart, col_log = st.columns(3)
+
+with col_unit:
+    unit = st.radio(
+        'GDP unit',
+        ['Trillion (T)', 'Billion (B)', 'Million (M)'],
+        index=1,
+    )
+
+with col_chart:
+    chart_type = st.radio(
+        'Chart type',
+        ['Line', 'Area'],
+        index=0,
+    )
+
+with col_log:
+    log_scale = st.checkbox('Log scale', value=False)
 
 unit_divisor = {'Trillion (T)': 1e12, 'Billion (B)': 1e9, 'Million (M)': 1e6}[unit]
 unit_label   = {'Trillion (T)': 'T',  'Billion (B)': 'B',  'Million (M)': 'M'}[unit]
@@ -236,20 +249,44 @@ if not missing.empty:
     st.warning('Missing data: ' + ' / '.join(parts))
 
 # -----------------------------------------------------------------------------
-# Line chart
+# Trend chart (Plotly)
 
 st.header('GDP over time', divider='gray')
 
-''
+filtered_gdp_df['Country'] = filtered_gdp_df['Country Code'].map(code_to_name)
 
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP_display',
-    color='Country Code',
+hover_tpl = '<b>%{fullData.name}</b><br>Year: %{x}<br>GDP: %{y:,.2f} ' + unit_label + '<extra></extra>'
+
+if chart_type == 'Line':
+    fig = px.line(
+        filtered_gdp_df.dropna(subset=['GDP_display']),
+        x='Year',
+        y='GDP_display',
+        color='Country',
+        labels={'GDP_display': f'GDP (USD {unit_label})', 'Year': 'Year'},
+        color_discrete_sequence=px.colors.qualitative.Plotly,
+    )
+else:
+    fig = px.area(
+        filtered_gdp_df.dropna(subset=['GDP_display']),
+        x='Year',
+        y='GDP_display',
+        color='Country',
+        labels={'GDP_display': f'GDP (USD {unit_label})', 'Year': 'Year'},
+        color_discrete_sequence=px.colors.qualitative.Plotly,
+    )
+
+fig.update_traces(hovertemplate=hover_tpl)
+fig.update_layout(
+    yaxis_type='log' if log_scale else 'linear',
+    yaxis_title=f'GDP (USD {unit_label})',
+    legend_title='Country',
+    hovermode='x unified',
+    margin=dict(l=0, r=0, t=30, b=0),
+    height=420,
 )
 
-st.caption(f'Unit: USD {unit_label}')
+st.plotly_chart(fig, use_container_width=True)
 
 ''
 ''
@@ -297,3 +334,41 @@ for i, country in enumerate(selected_countries):
             delta=growth,
             delta_color=delta_color,
         )
+
+# -----------------------------------------------------------------------------
+# Ranking bar chart
+
+''
+st.header(f'GDP ranking in {to_year}', divider='gray')
+''
+
+rank_data = []
+for code in selected_countries:
+    row = last_year_df[last_year_df['Country Code'] == code]['GDP']
+    val = row.iat[0] if len(row) else float('nan')
+    if not math.isnan(val):
+        rank_data.append({
+            'Country': code_to_name.get(code, code),
+            'GDP': val / unit_divisor,
+        })
+
+if rank_data:
+    rank_df = pd.DataFrame(rank_data).sort_values('GDP', ascending=True)
+    fig_bar = px.bar(
+        rank_df,
+        x='GDP',
+        y='Country',
+        orientation='h',
+        labels={'GDP': f'GDP (USD {unit_label})', 'Country': ''},
+        color='GDP',
+        color_continuous_scale='Blues',
+        text=rank_df['GDP'].apply(lambda v: f'{v:,.1f}{unit_label}'),
+    )
+    fig_bar.update_traces(textposition='outside')
+    fig_bar.update_layout(
+        coloraxis_showscale=False,
+        xaxis_type='log' if log_scale else 'linear',
+        margin=dict(l=0, r=60, t=10, b=0),
+        height=max(250, len(rank_data) * 50),
+    )
+    st.plotly_chart(fig_bar, use_container_width=True)
